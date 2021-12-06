@@ -1,4 +1,4 @@
-import { DEFAULT_PK_FACTORY, emitWarningOnce, resolveOptions } from './utils';
+import { DEFAULT_PK_FACTORY, emitWarningOnce, isRecord, resolveOptions } from './utils';
 import { ReadPreference, ReadPreferenceLike } from './read_preference';
 import {
   normalizeHintField,
@@ -96,6 +96,7 @@ import type {
   OptionalId,
   Flatten
 } from './mongo_types';
+import { EJSON } from 'bson';
 
 /** @public */
 export interface ModifyResult<TSchema = Document> {
@@ -283,6 +284,40 @@ export class Collection<TSchema extends Document = Document> {
     // we support that option style here only
     if (options && Reflect.get(options, 'w')) {
       options.writeConcern = WriteConcern.fromOptions(Reflect.get(options, 'w'));
+    }
+
+    if (this.s.db.s.client.atlasDataAPIMode) {
+      const client = this.s.db.s.client;
+      const url = client.s.url;
+      const fetch = client.s.nodeFetch.default;
+      return fetch(`${url}/action/insertOne`, {
+        method: 'post',
+        headers: {
+          'content-type': 'application/json',
+          'access-control-request-headers': '*',
+          'api-key': client.atlasDataAPIKey
+        },
+        body: EJSON.stringify(
+          {
+            collection: this.collectionName,
+            database: this.s.db.databaseName,
+            dataSource: client.options.atlasDataAPISource,
+            document: doc
+          },
+          { relaxed: false }
+        )
+      })
+        .then(r => r.text())
+        .then(json => EJSON.parse(json, { relaxed: false }) as Document)
+        .then(result => {
+          if (isRecord(result)) {
+            return {
+              acknowledged: !!result.insertedId,
+              insertedId: result.insertedId
+            } as InsertOneResult<TSchema>;
+          }
+          return { acknowledged: false };
+        });
     }
 
     return executeOperation(
@@ -721,6 +756,39 @@ export class Collection<TSchema extends Document = Document> {
 
     const finalFilter = filter ?? {};
     const finalOptions = options ?? {};
+
+    if (this.s.db.s.client.atlasDataAPIMode) {
+      const client = this.s.db.s.client;
+      const url = client.s.url;
+      const fetch = client.s.nodeFetch.default;
+      return fetch(`${url}/action/findOne`, {
+        method: 'post',
+        headers: {
+          'content-type': 'application/json',
+          'access-control-request-headers': '*',
+          'api-key': client.atlasDataAPIKey
+        },
+        body: EJSON.stringify(
+          {
+            collection: this.collectionName,
+            database: this.s.db.databaseName,
+            dataSource: client.options.atlasDataAPISource,
+            filter: finalFilter,
+            projection: finalOptions.projection
+          },
+          { relaxed: false }
+        )
+      })
+        .then(r => r.json())
+        .then(result => {
+          if (isRecord(result, ['document'])) {
+            return result.document;
+          } else {
+            return undefined;
+          }
+        });
+    }
+
     return this.find(finalFilter, finalOptions).limit(-1).batchSize(1).next(callback);
   }
 

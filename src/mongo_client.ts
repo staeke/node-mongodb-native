@@ -37,6 +37,7 @@ import type { Connection } from './cmap/connection';
 import type { LEGAL_TLS_SOCKET_OPTIONS, LEGAL_TCP_SOCKET_OPTIONS } from './cmap/connect';
 import type { Encrypter } from './encrypter';
 import { TypedEventEmitter } from './mongo_types';
+import { MongoMissingDependencyError } from '.';
 
 /** @public */
 export const ServerApiVersion = Object.freeze({
@@ -104,6 +105,10 @@ export type SupportedNodeConnectionOptions = SupportedTLSConnectionOptions &
  * @see https://docs.mongodb.com/manual/reference/connection-string
  */
 export interface MongoClientOptions extends BSONSerializeOptions, SupportedNodeConnectionOptions {
+  /** Specifies data API key if using Atlas Data API */
+  atlasDataAPIKey?: string;
+  /** Specifies data API source if using Atlas Data API */
+  atlasDataAPISource?: string;
   /** Specifies the name of the replica set, if the mongod is a member of a replica set. */
   replicaSet?: string;
   /** Enables or disables TLS/SSL for the connection. */
@@ -258,6 +263,7 @@ export type WithSessionCallback = (session: ClientSession) => Promise<any> | voi
 
 /** @internal */
 export interface MongoClientPrivate {
+  nodeFetch: typeof import('node-fetch');
   url: string;
   sessions: Set<ClientSession>;
   bsonOptions: BSONSerializeOptions;
@@ -346,6 +352,12 @@ export class MongoClient extends TypedEventEmitter<MongoClientEvents> {
       bsonOptions: resolveBSONOptions(this[kOptions]),
       namespace: ns('admin'),
 
+      nodeFetch: {
+        default() {
+          throw new MongoMissingDependencyError('node-fetch is required 🙀');
+        }
+      } as any,
+
       get options() {
         return client[kOptions];
       },
@@ -362,6 +374,14 @@ export class MongoClient extends TypedEventEmitter<MongoClientEvents> {
         return client[kOptions].logger;
       }
     };
+  }
+
+  get atlasDataAPIMode(): boolean {
+    return this[kOptions].atlasDataAPIMode;
+  }
+
+  get atlasDataAPIKey(): string {
+    return this[kOptions].atlasDataAPIKey;
   }
 
   get options(): Readonly<MongoOptions> {
@@ -414,6 +434,15 @@ export class MongoClient extends TypedEventEmitter<MongoClientEvents> {
   connect(): Promise<MongoClient>;
   connect(callback: Callback<MongoClient>): void;
   connect(callback?: Callback<MongoClient>): Promise<MongoClient> | void {
+    if (this[kOptions].atlasDataAPIMode) {
+      if (callback) throw new MongoInvalidArgumentError('Data API users must use promises');
+      const modImport = eval('import("node-fetch")') as Promise<typeof import('node-fetch')>;
+      return modImport.then(mod => {
+        this.s.nodeFetch = mod;
+        return this;
+      });
+    }
+
     if (callback && typeof callback !== 'function') {
       throw new MongoInvalidArgumentError('Method `connect` only accepts a callback');
     }
@@ -629,6 +658,8 @@ export interface MongoOptions
   extends Required<
       Pick<
         MongoClientOptions,
+        | 'atlasDataAPIKey'
+        | 'atlasDataAPISource'
         | 'autoEncryption'
         | 'connectTimeoutMS'
         | 'directConnection'
@@ -703,6 +734,8 @@ export interface MongoOptions
    *
    */
   tls: boolean;
+
+  atlasDataAPIMode: boolean;
 
   /**
    * Turn these options into a reusable connection URI

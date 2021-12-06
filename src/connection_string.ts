@@ -256,6 +256,8 @@ export function parseOptions(
   const mongoOptions = Object.create(null);
   mongoOptions.hosts = isSRV ? [] : hosts.map(HostAddress.fromString);
 
+  mongoOptions.atlasDataAPIMode = url.protocol === 'https:';
+
   const urlOptions = new CaseInsensitiveMap();
 
   if (url.pathname !== '/' && url.pathname !== '') {
@@ -538,6 +540,8 @@ interface OptionDescriptor {
 }
 
 export const OPTIONS = {
+  atlasDataAPIKey: { type: 'string' },
+  atlasDataAPISource: { type: 'string' },
   appName: {
     target: 'metadata',
     transform({ options, values: [value] }): DriverInfo {
