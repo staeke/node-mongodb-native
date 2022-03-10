@@ -45,20 +45,6 @@ import type { WriteConcern } from './write_concern';
 
 const minWireVersionForShardedTransactions = 8;
 
-function assertAlive(session: ClientSession, callback?: Callback): boolean {
-  if (session.serverSession == null) {
-    const error = new MongoExpiredSessionError();
-    if (typeof callback === 'function') {
-      callback(error);
-      return false;
-    }
-
-    throw error;
-  }
-
-  return true;
-}
-
 /** @public */
 export interface ClientSessionOptions {
   /** Whether causal consistency should be enabled on this session */
@@ -191,17 +177,36 @@ export class ClientSession extends TypedEventEmitter<ClientSessionEvents> {
   }
 
   /** The server id associated with this session */
-  get id(): ServerSessionId | undefined {
-    return this.serverSession?.id;
+  get id(): ServerSessionId {
+    return this.serverSession.id;
   }
 
+  /**
+   * Returns the ServerSession bound to this ClientSession
+   * throws if none exists, the serverSession should strictly only be inspected after
+   * it is acquired. It should only be acquired after a successful connection checkout
+   */
   get serverSession(): ServerSession {
-    if (this[kServerSession] == null) {
-      this[kServerSession] = this.sessionPool.acquire();
+    const serverSession = this[kServerSession];
+    if (serverSession == null) {
+      throw new MongoDriverError('Server Session not acquired');
     }
 
-    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-    return this[kServerSession]!;
+    return serverSession;
+  }
+
+  bindServerSession(): ServerSession {
+    if (this[kServerSession] != null) {
+      throw new MongoDriverError('Server session is already bound to this ClientSession');
+    }
+    const serverSession = this.sessionPool.acquire();
+    Object.defineProperty(this, kServerSession, {
+      value: serverSession,
+      configurable: false,
+      writable: false,
+      enumerable: false
+    });
+    return serverSession;
   }
 
   /** Whether or not this session is configured for snapshot reads */
@@ -271,7 +276,7 @@ export class ClientSession extends TypedEventEmitter<ClientSessionEvents> {
         maybeClearPinnedConnection(this, finalOptions);
 
         // release the server session back to the pool
-        this.sessionPool.release(this.serverSession);
+        this.sessionPool.release(this[kServerSession]);
         this[kServerSession] = undefined;
 
         // mark the session as ended, and emit a signal
@@ -282,7 +287,7 @@ export class ClientSession extends TypedEventEmitter<ClientSessionEvents> {
         done();
       };
 
-      if (this.serverSession && this.inTransaction()) {
+      if (this[kServerSession] && this.inTransaction()) {
         this.abortTransaction(err => {
           if (err) return done(err);
           completeEndSession();
@@ -358,9 +363,9 @@ export class ClientSession extends TypedEventEmitter<ClientSessionEvents> {
 
   /** Increment the transaction number on the internal ServerSession */
   incrementTransactionNumber(): void {
-    if (this.serverSession) {
-      this.serverSession.txnNumber =
-        typeof this.serverSession.txnNumber === 'number' ? this.serverSession.txnNumber + 1 : 0;
+    const serverSession = this[kServerSession];
+    if (serverSession != null) {
+      serverSession.txnNumber += 1;
     }
   }
 
@@ -379,7 +384,6 @@ export class ClientSession extends TypedEventEmitter<ClientSessionEvents> {
       throw new MongoCompatibilityError('Transactions are not allowed with snapshot sessions');
     }
 
-    assertAlive(this);
     if (this.inTransaction()) {
       throw new MongoTransactionError('Transaction already in progress');
     }
@@ -640,11 +644,6 @@ function attemptTransaction<TSchema>(
 }
 
 function endTransaction(session: ClientSession, commandName: string, callback: Callback<Document>) {
-  if (!assertAlive(session, callback)) {
-    // checking result in case callback was called
-    return;
-  }
-
   // handle any initial problematic cases
   const txnState = session.transaction.state;
 
@@ -899,7 +898,9 @@ export class ServerSessionPool {
    *
    * @param session - The session to release to the pool
    */
-  release(session: ServerSession): void {
+  release(session?: ServerSession): void {
+    if (!session) return;
+
     const sessionTimeoutMinutes = this.topology.logicalSessionTimeoutMinutes;
 
     if (this.topology.loadBalanced && !sessionTimeoutMinutes) {
@@ -947,7 +948,7 @@ export function applySession(
     return new MongoExpiredSessionError();
   }
 
-  const serverSession = session.serverSession;
+  const serverSession = session.bindServerSession();
   if (serverSession == null) {
     return new MongoRuntimeError('Unable to acquire server session');
   }
