@@ -187,6 +187,56 @@ describe('Change Streams', function () {
   });
   afterEach(async () => await mock.cleanup());
 
+  context('comment tests', () => {
+    let client;
+    beforeEach(async function () {
+      client = await this.configuration.newClient({ monitorCommands: true }).connect();
+    });
+
+    afterEach(async function () {
+      await client.close();
+    });
+
+    it.only(
+      'Test with document comment',
+      {
+        requires: {
+          mongodb: '>=4.4.0',
+          topology: '!single'
+        }
+      },
+      function (done) {
+        let commandEvents = [];
+        const spy = sinon.spy(client, 'emit');
+        client.on('commandSucceeded', () => {});
+        const collection = client.db('test-db').collection('test-collection');
+
+        withCursor(
+          collection.watch([], { comment: { test: 'name1' } }),
+          (cursor, done) => {
+            cursor.on('change', () => console.log('asdf'));
+
+            expect(spy).to.have.been.called();
+            expect(commandEvents).to.have.property('length', 2);
+            done();
+          },
+          done
+        );
+
+        // const changeStream = collection.watch([], { comment: { name: 'test1' } });
+
+        // changeStream.on('change', () => console.log('asdf'));
+
+        // console.error(commandEvents, i);
+
+        // expect(commandEvents).to.have.property('length', 2);
+
+        // client.removeListener(listener);
+        // changeStream.close();
+      }
+    );
+  });
+
   it('should close the listeners after the cursor is closed', {
     metadata: { requires: { topology: 'replicaset', mongodb: '>=3.6' } },
 
