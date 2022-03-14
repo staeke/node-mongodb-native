@@ -46,9 +46,13 @@ const kClosed = Symbol('closed');
 const kMode = Symbol('mode');
 
 const CHANGE_STREAM_OPTIONS = ['resumeAfter', 'startAfter', 'startAtOperationTime', 'fullDocument'];
-const CURSOR_OPTIONS = ['batchSize', 'maxAwaitTimeMS', 'collation', 'readPreference'].concat(
-  CHANGE_STREAM_OPTIONS
-);
+const CURSOR_OPTIONS = [
+  'batchSize',
+  'maxAwaitTimeMS',
+  'collation',
+  'readPreference',
+  'comment'
+].concat(CHANGE_STREAM_OPTIONS);
 
 const CHANGE_DOMAIN_TYPES = {
   COLLECTION: Symbol('Collection'),
@@ -399,6 +403,9 @@ export interface ChangeStreamCursorOptions extends AbstractCursorOptions {
   startAtOperationTime?: OperationTime;
   resumeAfter?: ResumeToken;
   startAfter?: boolean;
+
+  /** todo: add comment */
+  comment?: any;
 }
 
 /** @internal */
